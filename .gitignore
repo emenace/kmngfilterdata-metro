@@ -164,3 +164,7 @@ tmp/
 *.csv
 *.pdf
 *.db
+
+# Persistent local SQLite database
+data/
+*.sqlite

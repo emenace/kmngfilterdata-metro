@@ -5,6 +5,7 @@ const multer = require('multer');
 const { resolveConfig } = require('./config');
 const { ValidationError, processExcelBuffer } = require('./services/excelProcessor');
 const { parseDukHtmlBuffer, mergeDukIntoExcelResult } = require('./services/dukHtmlProcessor');
+const { parseImportBuffer } = require('./services/dataImporter');
 const {
   sanitizeFileBase,
   sanitizeTableName,
@@ -14,6 +15,12 @@ const {
 } = require('./services/exporters');
 const { verifyOutputs } = require('./services/integrityVerifier');
 const { JobStore } = require('./services/jobStore');
+const { LocalDatabase } = require('./services/localDb');
+const {
+  verifyPassword,
+  buildSessionCookie,
+  createAuthHelpers,
+} = require('./middleware/auth');
 
 const FORMAT_MIME_TYPES = Object.freeze({
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -32,15 +39,24 @@ function createApp(customConfig = {}) {
     tmpDir: cfg.TMP_DIR,
     ttlMs: cfg.JOB_TTL_MS,
   });
+  const localDb = new LocalDatabase({
+    dbPath: cfg.DB_PATH,
+    sessionTtlMs: cfg.SESSION_TTL_MS,
+  });
+  const auth = createAuthHelpers({ config: cfg, localDb });
 
   const app = express();
   app.locals.config = cfg;
   app.locals.jobStore = jobStore;
+  app.locals.localDb = localDb;
 
   const publicDir = path.resolve(__dirname, '..', 'public');
-  app.use(express.static(publicDir));
+  const viewsDir = path.resolve(__dirname, '..', 'views');
 
-  const upload = multer({
+  app.use(express.static(publicDir, { index: false }));
+  app.use(express.json({ limit: '1mb' }));
+
+  const uploadProcess = multer({
     storage: multer.memoryStorage(),
     limits: {
       fileSize: cfg.MAX_FILE_SIZE_BYTES,
@@ -78,6 +94,27 @@ function createApp(customConfig = {}) {
     },
   });
 
+  const uploadImport = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: cfg.MAX_FILE_SIZE_BYTES,
+      files: 1,
+    },
+    fileFilter: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      if (!cfg.ALLOWED_IMPORT_EXTENSIONS.includes(ext)) {
+        cb(
+          new ValidationError(
+            `Unsupported import file extension "${ext || '(none)'}". Allowed formats: .xls, .xlsx, .csv, .sqlite, .db.`
+          )
+        );
+        return;
+      }
+      cb(null, true);
+    },
+  });
+
+  // Public health & authentication routes
   app.get('/api/health', (_req, res) => {
     res.json({
       status: 'ok',
@@ -85,12 +122,128 @@ function createApp(customConfig = {}) {
     });
   });
 
-  const uploadFields = upload.fields([
+  app.get('/login', (req, res) => {
+    if (auth.isAuthenticated(req)) {
+      res.redirect(302, '/');
+      return;
+    }
+    res.sendFile(path.join(viewsDir, 'login.html'));
+  });
+
+  app.get('/api/auth/status', (req, res) => {
+    res.json({
+      authenticated: auth.isAuthenticated(req),
+    });
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    if (auth.isRateLimited(req)) {
+      res.status(429).json({ error: 'Too many failed login attempts. Please wait a few minutes and try again.' });
+      return;
+    }
+
+    const password = req.body && typeof req.body.password === 'string' ? req.body.password : '';
+    if (!password) {
+      res.status(400).json({ error: 'Please enter your password.' });
+      return;
+    }
+
+    if (!verifyPassword(password, cfg.APP_PASSWORD)) {
+      auth.recordFailedAttempt(req);
+      res.status(401).json({ error: 'Invalid password. Please try again.' });
+      return;
+    }
+
+    auth.clearFailedAttempts(req);
+    const { token } = localDb.createSession();
+    res.setHeader(
+      'Set-Cookie',
+      buildSessionCookie({
+        name: cfg.SESSION_COOKIE_NAME,
+        value: token,
+        maxAgeSeconds: cfg.SESSION_TTL_MS / 1000,
+        secure: cfg.COOKIE_SECURE,
+      })
+    );
+    res.json({ ok: true });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    const token = auth.getSessionToken(req);
+    if (token) {
+      localDb.deleteSession(token);
+    }
+    res.setHeader(
+      'Set-Cookie',
+      buildSessionCookie({
+        name: cfg.SESSION_COOKIE_NAME,
+        value: '',
+        maxAgeSeconds: 0,
+        secure: cfg.COOKIE_SECURE,
+      })
+    );
+    res.json({ ok: true });
+  });
+
+  // Protected HTML pages
+  app.get('/', auth.requirePageAuth, (_req, res) => {
+    res.sendFile(path.join(viewsDir, 'dashboard.html'));
+  });
+
+  app.get('/generate', auth.requirePageAuth, (_req, res) => {
+    res.sendFile(path.join(viewsDir, 'generate.html'));
+  });
+
+  // Protected dashboard SQLite read & multi-format import endpoints
+  app.get('/api/data', auth.requireApiAuth, (req, res) => {
+    const search = typeof req.query.q === 'string' ? req.query.q : '';
+    const dataset = localDb.getDataset({ search });
+    res.json(dataset);
+  });
+
+  app.post(
+    '/api/import',
+    auth.requireApiAuth,
+    uploadImport.single('file'),
+    (req, res, next) => {
+      if (!req.file) {
+        next(new ValidationError('Please choose a file (.xls, .xlsx, .csv, or .sqlite) to import.'));
+        return;
+      }
+
+      try {
+        const parsed = parseImportBuffer(req.file.buffer, req.file.originalname);
+        const savedMeta = localDb.replaceDataset({
+          sourceFilename: req.file.originalname,
+          sourceFormat: parsed.sourceFormat,
+          columns: parsed.columns,
+          rows: parsed.rows,
+        });
+
+        res.json({
+          ok: true,
+          meta: {
+            sourceFilename: savedMeta.sourceFilename,
+            sourceFormat: savedMeta.sourceFormat,
+            importedAt: savedMeta.importedAt,
+            rowCount: savedMeta.rowCount,
+          },
+          columns: savedMeta.columns,
+          totalRows: savedMeta.rowCount,
+        });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  // Protected Excel + DUK HTML generator & export download endpoints
+  const uploadFields = uploadProcess.fields([
     { name: 'file', maxCount: 1 },
     { name: 'dukFile', maxCount: 1 },
   ]);
 
-  app.post('/api/process', uploadFields, (req, res, next) => {
+  app.post('/api/process', auth.requireApiAuth, uploadFields, (req, res, next) => {
     const baseFile = req.files && req.files.file && req.files.file[0];
     if (!baseFile) {
       next(new ValidationError('Please upload a base Excel file (.xls or .xlsx) in the "file" field.'));
@@ -268,7 +421,7 @@ function createApp(customConfig = {}) {
     }
   });
 
-  app.get('/api/download/:jobId/:format', (req, res, next) => {
+  app.get('/api/download/:jobId/:format', auth.requireApiAuth, (req, res, next) => {
     const { jobId, format } = req.params;
     const normalizedFormat = String(format || '').toLowerCase();
 
@@ -322,7 +475,7 @@ function createApp(customConfig = {}) {
     }
 
     console.error('[server error]', err);
-    res.status(500).json({ error: 'An unexpected error occurred while processing the uploaded files.' });
+    res.status(500).json({ error: 'An unexpected error occurred while processing the request.' });
   });
 
   return app;

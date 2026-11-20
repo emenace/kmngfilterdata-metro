@@ -1,12 +1,12 @@
 (() => {
   const PAGE_SIZE = 20;
 
+  const logoutBtn = document.getElementById('logoutBtn');
   const uploadSection = document.getElementById('uploadSection');
   const dukToggle = document.getElementById('dukToggle');
   const dropzonesGrid = document.getElementById('dropzonesGrid');
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
-  const excelDropTitle = document.getElementById('excelDropTitle');
   const excelDropHint = document.getElementById('excelDropHint');
   const excelSelectedBadge = document.getElementById('excelSelectedBadge');
 
@@ -374,6 +374,11 @@
         body: formData,
       });
 
+      if (response.status === 401) {
+        window.location.assign('/login');
+        return;
+      }
+
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(payload.error || `Server returned status ${response.status}.`);
@@ -426,6 +431,11 @@
     selectedDukFile = file;
     updateStagedSelectionUI();
   }
+
+  logoutBtn.addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    window.location.assign('/login');
+  });
 
   dukToggle.addEventListener('change', () => {
     hideError();
@@ -540,3 +550,4 @@
 
   syncDukToggleUI();
 })();
+

@@ -5,7 +5,16 @@ APP_NAME="kmngfilterdata-metro"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$SCRIPT_DIR/.env"
+  set +a
+fi
+
 export PORT="${PORT:-3000}"
+export APP_PASSWORD="${APP_PASSWORD:-kemenagmetro}"
+export DB_PATH="${DB_PATH:-$SCRIPT_DIR/data/kmng_metro.sqlite}"
 export MAX_FILE_SIZE_MB="${MAX_FILE_SIZE_MB:-100}"
 export JOB_TTL_MINUTES="${JOB_TTL_MINUTES:-60}"
 

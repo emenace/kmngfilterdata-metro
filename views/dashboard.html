@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Employee Data Dashboard — Kemenag Kota Metro</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page-shell dashboard-shell">
+    <header class="top-bar card">
+      <div class="top-bar-brand">
+        <div class="header-badge">Kementerian Agama Kota Metro</div>
+        <h1 class="top-bar-title">Employee Data Dashboard</h1>
+        <div id="datasetMetaSummary" class="top-bar-meta">Loading saved database&hellip;</div>
+      </div>
+
+      <nav class="top-actions" aria-label="Dashboard actions">
+        <button id="openImportBtn" type="button" class="btn btn-primary">Import</button>
+        <a href="/generate" class="btn btn-secondary">Generate</a>
+        <button id="logoutBtn" type="button" class="btn btn-ghost">Logout</button>
+      </nav>
+    </header>
+
+    <main class="main-content">
+      <section id="dashboardError" class="alert alert-error hidden" role="alert">
+        <div class="alert-title">Unable to load data</div>
+        <div id="dashboardErrorMessage" class="alert-body"></div>
+      </section>
+
+      <section id="emptyState" class="card empty-state hidden">
+        <div class="empty-state-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3" />
+            <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
+            <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" />
+          </svg>
+        </div>
+        <h2>No employee data stored yet</h2>
+        <p>
+          Import a generated <code>.xlsx</code>, <code>.xls</code>, <code>.csv</code>, or <code>.sqlite</code> file into the server&rsquo;s local SQLite database, or open <strong>Generate</strong> to filter a new provincial Excel report.
+        </p>
+        <div class="empty-state-actions">
+          <button id="emptyImportBtn" type="button" class="btn btn-primary">Import File</button>
+          <a href="/generate" class="btn btn-secondary">Go to Generate</a>
+        </div>
+      </section>
+
+      <section id="tableCard" class="card dashboard-table-card hidden">
+        <div class="dashboard-toolbar">
+          <div class="search-wrap">
+            <input
+              id="tableSearch"
+              type="search"
+              class="search-input dashboard-search-input"
+              placeholder="Search any column (NIP, name, position, satker)..."
+              aria-label="Search employee table"
+            />
+            <button id="clearSearchBtn" type="button" class="btn btn-small hidden">Clear</button>
+          </div>
+
+          <div class="toolbar-meta">
+            <span id="recordCounter" class="record-counter">0 records</span>
+            <span class="copy-hint">Tap or click any cell to copy &bull; Scroll to browse</span>
+          </div>
+        </div>
+
+        <div id="tableScrollWrap" class="dashboard-table-wrap">
+          <table id="dashboardTable" class="dashboard-table">
+            <colgroup id="dashboardColgroup"></colgroup>
+            <thead id="dashboardThead"></thead>
+            <tbody id="dashboardTbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Import Modal -->
+  <div id="importModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+    <div class="modal-dialog card">
+      <div class="modal-header">
+        <div>
+          <div class="eyebrow">Local SQLite Storage</div>
+          <h2 id="importModalTitle" class="modal-title">Import Employee File</h2>
+        </div>
+        <button id="closeImportModalBtn" type="button" class="modal-close-btn" aria-label="Close modal">&times;</button>
+      </div>
+
+      <p class="modal-desc">
+        Upload a generated <code>.xlsx</code>, <code>.xls</code>, <code>.csv</code>, or <code>.sqlite</code> file to populate the server&rsquo;s local SQLite database. Importing replaces the currently displayed dataset.
+      </p>
+
+      <div id="importError" class="alert alert-error hidden" role="alert">
+        <div id="importErrorMessage" class="alert-body"></div>
+      </div>
+
+      <label id="importDropzone" class="dropzone" for="importFileInput" tabindex="0">
+        <input id="importFileInput" type="file" accept=".xls,.xlsx,.csv,.sqlite,.db" class="sr-only" />
+        <div class="dropzone-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        </div>
+        <div class="dropzone-title">Drop file here, or <span class="browse-link">browse from device</span></div>
+        <div class="dropzone-hint">Supports <code>.xlsx</code>, <code>.xls</code>, <code>.csv</code>, and <code>.sqlite</code> / <code>.db</code></div>
+        <div id="importSelectedBadge" class="selected-file-badge hidden"></div>
+      </label>
+
+      <div id="importProcessing" class="import-processing hidden" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <span>Importing records into local SQLite database&hellip;</span>
+      </div>
+
+      <div class="modal-footer">
+        <button id="cancelImportBtn" type="button" class="btn btn-secondary">Cancel</button>
+        <button id="submitImportBtn" type="button" class="btn btn-primary" disabled>Import into SQLite</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="copyToast" class="copy-toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
+

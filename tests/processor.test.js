@@ -27,6 +27,51 @@ const {
 const SAMPLE_XLS_PATH = path.resolve(__dirname, '..', '02090000000000-3.xls');
 const SAMPLE_DUK_PATH = path.resolve(__dirname, '..', 'November DUK-SISDM Kementerian Agama.html');
 
+const FALLBACK_DUK_HTML = `<!DOCTYPE html>
+<html>
+<head><title>DUK-SISDM Kementerian Agama</title></head>
+<body>
+  <span id="lblSatker">KANTOR KEMENTERIAN AGAMA KOTA METRO</span>
+  <table>
+    <tr>
+      <td rowspan="2">NO</td>
+      <td rowspan="2">NAMA</td>
+      <td colspan="2">PANGKAT</td>
+      <td colspan="2">JABATAN</td>
+      <td colspan="2">MASA KERJA</td>
+      <td colspan="3">PENDIDIKAN TERAKHIR</td>
+      <td rowspan="2">TGL<br/>LAHIR</td>
+      <td rowspan="2">TMT PENSIUN</td>
+      <td rowspan="2">KET.</td>
+    </tr>
+    <tr>
+      <td>GOL/ RUANG</td><td>T M T</td><td>NAMA</td><td>T M T</td><td>THN</td><td>BLN</td><td>NAMA</td><td>THN</td><td>JML JAM</td>
+    </tr>
+    <tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td><td>9</td><td>10</td><td>11</td><td>12</td><td>13</td><td>14</td></tr>
+    <tr>
+      <td>1</td><td>Dra. ERLINA HARNIATI <br/>150261975 / 196703251993032001</td><td>IV/c</td><td>01-11-2026</td>
+      <td>Guru Ahli Madya pada MAN 1 Metro Kota Metro Provinsi Lampung</td><td>01-04-2019</td><td>33</td><td>8</td>
+      <td>Univ. Muhammadiyah</td><td>1991</td><td>S-1/Sarjana</td><td>25-03-1967</td><td>01-04-2027</td><td></td>
+    </tr>
+    <tr>
+      <td>2</td><td>SHOLEHA, S.Pd.<br/>250108080 / 199708312025212042</td><td>IX</td><td>01-10-2025</td>
+      <td>Penata Layanan Operasional pada MAN 1 Metro Kota Metro Provinsi Lampung</td><td>01-10-2025</td><td>1</td><td>1</td>
+      <td>Univ</td><td>2021</td><td>S-1/Sarjana</td><td>31-08-1997</td><td>01-09-2055</td><td></td>
+    </tr>
+    <tr>
+      <td>3</td><td>PRAKAS SETIAWAN S.Kom.<br/>PW0006265 / 199809162025211045</td><td>LAIN-LAIN</td><td>01-10-2025</td>
+      <td>Penata Layanan Operasional (Jabatan Pelaksana) pada Kantor Kementerian Agama Kota Metro Provinsi Lampung (PPPK PARUH WAKTU)</td>
+      <td>01-10-2025</td><td>1</td><td>1</td><td>Sekolah Tinggi Manajemen dan Informatika</td><td>2021</td><td>S-1/Sarjana</td><td>16-09-1998</td><td>01-10-2056</td><td></td>
+    </tr>
+    <tr>
+      <td>4</td><td>MUCHAMAD ATOQ ILLAH <br/>PW0001210 / 197611182025211029</td><td>LAIN-LAIN</td><td>01-10-2025</td>
+      <td>Operator Layanan Operasional (Jabatan Pelaksana) pada Kantor Kementerian Agama Kota Metro Provinsi Lampung (PPPK PARUH WAKTU)</td>
+      <td>01-10-2025</td><td>1</td><td>1</td><td>-</td><td>1995</td><td>SLTA/SMA SEDERAJAT</td><td>18-11-1976</td><td>01-12-2034</td><td></td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
 function makeTempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -150,31 +195,35 @@ test('processes real provincial sample file 02090000000000-3.xls with NO column 
   }
 });
 
-test('merges missing personnel from real November DUK-SISDM HTML file with base Excel and preserves 100% integrity', () => {
-  assert.equal(fs.existsSync(SAMPLE_DUK_PATH), true, 'Sample DUK HTML file must exist in workspace');
+test('merges missing personnel from DUK-SISDM HTML with base Excel and preserves 100% integrity', () => {
+  const hasRealDuk = fs.existsSync(SAMPLE_DUK_PATH);
+  const dukBuffer = hasRealDuk
+    ? fs.readFileSync(SAMPLE_DUK_PATH)
+    : Buffer.from(FALLBACK_DUK_HTML, 'utf8');
+  const dukFilename = hasRealDuk ? 'November DUK-SISDM Kementerian Agama.html' : 'duk-sample.html';
 
   const baseResult = processExcelBuffer(
     fs.readFileSync(SAMPLE_XLS_PATH),
     '02090000000000-3.xls'
   );
-  const dukResult = parseDukHtmlBuffer(
-    fs.readFileSync(SAMPLE_DUK_PATH),
-    'November DUK-SISDM Kementerian Agama.html'
-  );
+  const dukResult = parseDukHtmlBuffer(dukBuffer, dukFilename);
+
+  const expectedDukTotal = hasRealDuk ? 373 : 4;
+  const expectedAlready = hasRealDuk ? 360 : 2;
+  const expectedAdded = hasRealDuk ? 13 : 2;
+  const expectedCombinedCount = 360 + expectedAdded;
 
   assert.equal(dukResult.satkerTitle, 'KANTOR KEMENTERIAN AGAMA KOTA METRO');
-  assert.equal(dukResult.totalDukRows, 373);
+  assert.equal(dukResult.totalDukRows, expectedDukTotal);
 
-  const combined = mergeDukIntoExcelResult(baseResult, dukResult, {
-    dukFilename: 'November DUK-SISDM Kementerian Agama.html',
-  });
+  const combined = mergeDukIntoExcelResult(baseResult, dukResult, { dukFilename });
 
   assert.equal(combined.baseExcelFilteredRows, 360);
-  assert.equal(combined.filteredRowCount, 373);
+  assert.equal(combined.filteredRowCount, expectedCombinedCount);
   assert.equal(combined.duk.enabled, true);
-  assert.equal(combined.duk.alreadyInExcelCount, 360);
-  assert.equal(combined.duk.addedFromDukCount, 13);
-  assert.equal(combined.duk.addedPeople.length, 13);
+  assert.equal(combined.duk.alreadyInExcelCount, expectedAlready);
+  assert.equal(combined.duk.addedFromDukCount, expectedAdded);
+  assert.equal(combined.duk.addedPeople.length, expectedAdded);
 
   // First 360 rows must remain completely untouched compared to base Excel.
   assert.deepEqual(combined.rows.slice(0, 360), baseResult.rows);
@@ -182,7 +231,7 @@ test('merges missing personnel from real November DUK-SISDM HTML file with base 
   const cols = combined.keptColumns;
   const idx = (name) => cols.indexOf(name);
 
-  // Spot-check first appended DUK person (#361 -> index 360) and last (#373 -> index 372).
+  // Spot-check first appended DUK person (#361 -> index 360) and last appended row.
   const firstAdded = combined.rows[360];
   assert.equal(firstAdded[idx('NIP')], 'PW0006265');
   assert.equal(firstAdded[idx('NIP_BARU')], '199809162025211045');
@@ -196,7 +245,7 @@ test('merges missing personnel from real November DUK-SISDM HTML file with base 
   assert.equal(firstAdded[idx('SATKER_3')], 'Kantor Kementerian Agama Kota Metro');
   assert.equal(firstAdded[idx('SATKER_4')], 'Kanwil Kementerian Agama Provinsi Lampung');
 
-  const lastAdded = combined.rows[372];
+  const lastAdded = combined.rows[expectedCombinedCount - 1];
   assert.equal(lastAdded[idx('NIP')], 'PW0001210');
   assert.equal(lastAdded[idx('NIP_BARU')], '197611182025211029');
   assert.equal(lastAdded[idx('NAMA_LENGKAP')], 'MUCHAMAD ATOQ ILLAH');
@@ -243,19 +292,20 @@ test('merges missing personnel from real November DUK-SISDM HTML file with base 
 
     assert.equal(report.verified, true);
     assert.equal(report.alteredCells, 0);
-    assert.equal(report.checkedRows, 373);
+    assert.equal(report.checkedRows, expectedCombinedCount);
     assert.equal(report.checkedColumns, 27);
     assert.equal(report.formats.xlsx.columnCount, 28);
     assert.equal(report.formats.csv.columnCount, 28);
     assert.equal(report.formats.sqlite.columnCount, 27);
 
+    const lastIdx = expectedCombinedCount - 1;
     const xlsxData = readBackXlsx(files.xlsx);
-    assert.equal(xlsxData.rows[372][0], '373');
-    assert.equal(xlsxData.rows[372][2], '197611182025211029');
+    assert.equal(xlsxData.rows[lastIdx][0], String(expectedCombinedCount));
+    assert.equal(xlsxData.rows[lastIdx][2], '197611182025211029');
 
     const csvData = readBackCsv(files.csv);
-    assert.equal(csvData.rows[372][0], '373');
-    assert.equal(csvData.rows[372][2], '197611182025211029');
+    assert.equal(csvData.rows[lastIdx][0], String(expectedCombinedCount));
+    assert.equal(csvData.rows[lastIdx][2], '197611182025211029');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

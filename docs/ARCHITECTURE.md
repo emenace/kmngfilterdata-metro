@@ -2,50 +2,81 @@
 
 ## 1. High-Level Architecture
 
-The application follows a minimal, modular monolith pattern built on Node.js and Express with zero frontend build tooling and built-in SQLite (`node:sqlite`).
+The application is a lightweight Node.js + Express monolith using server-protected HTML views (`views/`), static assets (`public/`), and Node's built-in `node:sqlite` for both persistent storage (`data/kmng_metro.sqlite`) and `.sqlite` exports.
 
 ```mermaid
 flowchart TD
-    Browser["Browser UI (public/index.html, app.js)"]
+    Browser["Browser UI (Desktop / Mobile)"]
+    Auth["Auth Middleware (src/middleware/auth.js)"]
     Express["Express Server (src/app.js)"]
-    Multer["Multer Memory Upload (.xls/.xlsx + optional .html)"]
+    LocalDb["Persistent SQLite DB (src/services/localDb.js)"]
+    Importer["Multi-Format Importer (src/services/dataImporter.js)"]
     ExcelProc["Excel Processor (src/services/excelProcessor.js)"]
     DukProc["DUK HTML Processor (src/services/dukHtmlProcessor.js)"]
     Exporters["Multi-Format Exporters (src/services/exporters.js)"]
     Verifier["Integrity Verifier (src/services/integrityVerifier.js)"]
-    JobStore["Job Store & TTL Cleanup (src/services/jobStore.js)"]
-    Disk["Temporary Job Directory (tmp/jobs/uuid)"]
+    JobStore["Temp Job Store (src/services/jobStore.js)"]
 
-    Browser -->|"POST /api/process (multipart)"| Express
-    Express --> Multer
-    Multer -->|"file (.xls/.xlsx)"| ExcelProc
-    Multer -->|"optional dukFile (.html/.htm)"| DukProc
+    Browser -->|"GET /login, POST /api/auth/login"| Express
+    Express --> Auth
+    Auth <-->|"Validate / Create Sessions"| LocalDb
+    Browser -->|"GET / (Dashboard) & GET /api/data"| Auth
+    Browser -->|"POST /api/import (.xls/.xlsx/.csv/.sqlite)"| Importer
+    Importer -->|"Atomic Replace"| LocalDb
+    Browser -->|"GET /generate & POST /api/process"| ExcelProc
     ExcelProc -->|"Base Filtered Rows"| DukProc
     DukProc -->|"Filtered or Combined Rows"| Exporters
-    Exporters -->|"Write .xlsx (NO + data), .csv (NO + data), .sqlite"| Disk
-    Disk -->|"Read-back Check + SHA-256"| Verifier
-    Verifier -->|"Verified File Metadata"| JobStore
-    JobStore -->|"Download URLs + Preview JSON"| Browser
-    Browser -->|"GET /api/download/:jobId/:format"| Express
-    Express -->|"Stream Verified File"| Disk
+    Exporters -->|"Write .xlsx, .csv, .sqlite"| Verifier
+    Verifier -->|"Verified Download Metadata"| JobStore
+    Browser -->|"GET /api/download/:jobId/:format"| JobStore
 ```
 
 ## 2. Component Breakdown
 
 | File | Responsibility |
 | --- | --- |
-| `src/config.js` | Centralizes filter rules (`SATKER_3`, `"Kantor Kementerian Agama Kota Metro"`, `/^KODE_/i`), allowed `.xls`/`.xlsx`/`.html`/`.htm` extensions, file limits, TTL, and port overrides. |
-| `src/server.js` | Application entrypoint; starts Express listener, TTL cleanup scheduler, and graceful `SIGINT`/`SIGTERM` handlers. |
-| `src/app.js` | Configures static file serving (`public/`), `multer` dual-field memory upload validation (`file`, `dukFile`), `/api/health`, `/api/process`, `/api/download/:jobId/:format`, and JSON error handling. |
-| `src/services/excelProcessor.js` | Parses BIFF8 `.xls` and `.xlsx` buffers via SheetJS (`raw: true, cellDates: false`), validates `SATKER_3`, filters matching rows, drops `KODE_*` columns, and extracts canonical exact strings + raw cell descriptors. |
-| `src/services/dukHtmlProcessor.js` | Parses DUK-SISDM HTML tables, validates DUK structure, extracts 14-column employee records, deduplicates against base Excel rows by `NIP_BARU` / `NIP`, and appends missing employees mapped into the retained schema. |
-| `src/services/exporters.js` | Writes three independent output artifacts: `.xlsx` (Column A `NO` `1..N` + explicit string data cells), `.csv` (Column A `NO` `1..N` + RFC 4180 + UTF-8 BOM), and `.sqlite` (`node:sqlite` single-file database). |
-| `src/services/integrityVerifier.js` | Reads back each generated `.xlsx`, `.csv`, and `.sqlite` file from disk, validates headers, sequential `NO` (`1..N`) in XLSX/CSV, row counts, `SATKER_3` predicate, absence of `KODE_*`, cell-by-cell equality, and length-framed SHA-256 checksums. |
-| `src/services/jobStore.js` | Creates UUID-isolated job directories under `tmp/jobs/`, enforces UUID format validation, serves metadata until TTL expiration, and prunes stale directories. |
-| `src/utils/csv.js` | Zero-dependency RFC 4180 CSV serializer and state-machine parser preserving leading zeros, commas, quotes, newlines, and whitespace. |
-| `public/` | Static HTML/CSS/JS frontend providing auto-upload on single Excel upload, optional DUK HTML checkbox + dual dropzone flow, KPI cards, DUK merge summary, integrity banner, 3 download buttons, column audit chips, and searchable paginated preview. |
+| `src/config.js` | Centralizes `APP_PASSWORD`, `DB_PATH`, session cookie settings, filter rules (`SATKER_3`, `"Kantor Kementerian Agama Kota Metro"`, `/^KODE_/i`), allowed extensions, upload size limits, and TTLs. |
+| `src/server.js` | Application entrypoint; starts Express listener, TTL job cleanup scheduler, and closes both HTTP server and `localDb` on `SIGINT`/`SIGTERM`. |
+| `src/middleware/auth.js` | Parses `Cookie` headers, performs constant-time SHA-256 password verification (`crypto.timingSafeEqual`), manages per-IP login rate limiting, and provides `requirePageAuth` (`302 /login`) and `requireApiAuth` (`401`). |
+| `src/services/localDb.js` | Manages the persistent SQLite database (`data/kmng_metro.sqlite` in `WAL` mode) containing `_sessions`, `_dataset_meta`, and `pegawai_data`, including atomic dataset replacement and SQL `LIKE` search filtering. |
+| `src/services/dataImporter.js` | Parses uploaded `.xls`, `.xlsx`, `.csv`, and `.sqlite`/`.db` files into normalized columns and string rows, automatically stripping a leading `NO` column so exported files re-import cleanly. |
+| `src/app.js` | Serves static CSS/JS (`public/`, `index: false`), protects HTML views (`views/`), exposes auth endpoints, `/api/data`, `/api/import`, `/api/process`, and `/api/download/:jobId/:format`. |
+| `src/services/excelProcessor.js` | Parses BIFF8 `.xls` and `.xlsx` buffers via SheetJS (`raw: true, cellDates: false`), validates `SATKER_3`, filters matching rows, and drops `KODE_*` columns. |
+| `src/services/dukHtmlProcessor.js` | Parses DUK-SISDM HTML tables, deduplicates against base Excel rows by `NIP_BARU` / `NIP`, and appends missing employees mapped into the retained schema. |
+| `src/services/exporters.js` | Writes `.xlsx` (Column A `NO` `1..N` + explicit string cells), `.csv` (Column A `NO` `1..N` + RFC 4180 + UTF-8 BOM), and `.sqlite` (`node:sqlite` single-file database). |
+| `src/services/integrityVerifier.js` | Reads back generated `.xlsx`, `.csv`, and `.sqlite` files from disk and verifies sequential `NO`, headers, `SATKER_3` predicate, cell-by-cell equality, and canonical SHA-256 digests. |
+| `src/services/jobStore.js` | Manages UUID-isolated temporary export directories under `tmp/jobs/` and TTL expiration cleanup. |
+| `views/` & `public/` | Server-gated HTML views (`login.html`, `dashboard.html`, `generate.html`) and mobile-responsive client scripts (`login.js`, `dashboard.js`, `generate.js`, `styles.css`). |
 
-## 3. Data Processing & Integrity Pipeline
+## 3. Core Flows
+
+### 3.1 Authentication & Persistent Dashboard Import
+
+```mermaid
+sequenceDiagram
+    participant U as User Browser
+    participant A as Auth & Express API
+    participant I as DataImporter
+    participant D as LocalDatabase (SQLite)
+
+    U->>A: GET /
+    A-->>U: 302 Redirect /login (when unauthenticated)
+    U->>A: POST /api/auth/login { password }
+    A->>A: timingSafeEqual(SHA256(input), SHA256(APP_PASSWORD))
+    A->>D: createSession()
+    A-->>U: 200 OK + Set-Cookie (HttpOnly; SameSite=Lax)
+    U->>A: GET / & GET /api/data
+    A->>D: getDataset()
+    D-->>A: { hasData, meta, columns, rows }
+    A-->>U: Render word-wrapped click-to-copy table
+    U->>A: POST /api/import (file: .xls/.xlsx/.csv/.sqlite)
+    A->>I: parseImportBuffer(buffer, filename)
+    I-->>A: Normalized { sourceFormat, columns, rows }
+    A->>D: replaceDataset() [BEGIN IMMEDIATE ... COMMIT]
+    A-->>U: 200 OK { meta, totalRows }
+```
+
+### 3.2 Excel + DUK HTML Filter & Export Pipeline (`/generate`)
 
 ```mermaid
 sequenceDiagram
@@ -58,79 +89,43 @@ sequenceDiagram
 
     U->>A: POST /api/process (file, optional includeDuk + dukFile)
     A->>P: processExcelBuffer(baseBuffer)
-    P->>P: Filter SATKER_3 & drop KODE_* columns
-    P-->>A: Base filtered rows (360 rows x 27 cols)
+    P-->>A: Base filtered rows (SATKER_3 matched, KODE_* dropped)
     opt includeDuk is enabled
-        A->>D: parseDukHtmlBuffer(dukBuffer)
-        A->>D: mergeDukIntoExcelResult(baseResult, dukResult)
-        D-->>A: Combined rows (360 untouched + 13 appended = 373)
+        A->>D: parseDukHtmlBuffer(dukBuffer) + mergeDukIntoExcelResult()
+        D-->>A: Combined rows (base untouched + missing DUK appended)
     end
     A->>E: exportXlsx(NO + data), exportCsv(NO + data), exportSqlite(data)
-    E-->>A: Output files written to tmp/jobs/<uuid>/
     A->>V: verifyOutputs(expectedHeaders, expectedRows, files)
-    V->>V: Read back .xlsx, .csv, .sqlite from disk
-    V->>V: Verify NO=1..N (XLSX/CSV), every cell & SHA-256 digest
     V-->>A: verified = true, alteredCells = 0
-    A-->>U: 200 JSON (stats, duk summary, checksum, 3 download URLs, preview)
-    U->>A: GET /api/download/:jobId/{xlsx|csv|sqlite}
-    A-->>U: Stream verified attachment file
+    A-->>U: 200 JSON (stats, checksum, 3 download URLs, preview)
 ```
 
-## 4. Zero-Mutation & Merge Engineering Decisions
+## 4. Key Engineering Decisions
 
-1. **BIFF8 `.xls` and `.xlsx` Parsing (`SheetJS`)**:
-   - Opened with `{ type: 'buffer', raw: true, cellDates: false, cellNF: true, cellStyles: false, cellFormula: false }`.
-   - Prevents SheetJS from coercing mixed date strings or floating-point rounding long IDs.
-2. **DUK HTML Deduplication & Non-Destructive Append**:
-   - Base Excel filtered rows are shallow-copied and never modified or overwritten by DUK HTML fields (base Excel carries richer fields such as `AGAMA`, `STATUS_KAWIN`, `TMT_CPNS`, and `GRUP_SATUAN_KERJA`).
-   - Deduplication matches primarily on `NIP_BARU` (18-digit employee ID) and falls back to `NIP`. Both Excel-to-DUK and intra-DUK duplicates are ignored.
-   - `TMT_JABATAN` and `TMT_PENSIUN` from DUK (`DD-MM-YYYY`) are normalized to `YYYY-MM-DD` to match the exact format of those columns in the base Excel file, while `TMT_PANGKAT` stays `DD-MM-YYYY`.
-3. **Sequential Column A (`NO`: `1..N`) in XLSX & CSV**:
-   - `exportXlsx` writes Column `A` (`NO` header as string, row values `1..N` as numeric `{ t: 'n', v: r + 1 }`) and shifts data columns to `B`..`AB`.
-   - `exportCsv` prepends `'NO'` and `String(r + 1)` to every serialized row.
-   - `exportSqlite` keeps the exact 27 data columns (`rowid` serves as SQLite's built-in row ID).
-4. **18-Digit Identifier (`NIP_BARU`) Protection**:
-   - In `XLSX`, string data cells are written explicitly as `{ t: 's', v: val }` rather than relying on auto-typing.
-   - In `SQLite`, all columns use `TEXT NOT NULL` inside a single transaction with `PRAGMA journal_mode = DELETE;` (no `-wal`/`-shm` sidecars).
-   - In `CSV`, exact values are serialized under RFC 4180 quoting with UTF-8 BOM.
-5. **Canonical SHA-256 Read-Back Verification**:
-   - `computeCanonicalHash(headers, rows)` feeds length-prefixed header and cell byte strings (`${Buffer.byteLength(val)}:${val}\0`) into SHA-256.
-   - For `.xlsx` and `.csv`, `verifyOutputs` asserts `Column A === 'NO'` and `row[0] === String(r + 1)`, then verifies the canonical SHA-256 digest of columns `B..` equals the expected dataset digest and the `.sqlite` table digest.
+1. **HTML View Isolation (`views/` vs `public/`)**:
+   - All HTML templates (`login.html`, `dashboard.html`, `generate.html`) live outside `public/` and are served only through authenticated Express handlers (`requirePageAuth`). `express.static` serves `public/` with `{ index: false }`, preventing direct URL access to protected views without a session cookie.
+2. **Zero-Mutation Persistence (`node:sqlite`)**:
+   - Both the persistent server database (`data/kmng_metro.sqlite`, `WAL` mode) and exported `.sqlite` files (`DELETE` journal mode) store all imported columns as `TEXT NOT NULL` so 18-digit `NIP_BARU` values, leading zeros, negative integers, and mixed date strings are never coerced.
+   - `LocalDatabase.replaceDataset` wraps `DROP TABLE IF EXISTS pegawai_data` + `CREATE TABLE` + batch inserts + `_dataset_meta` update in an atomic `BEGIN IMMEDIATE ... COMMIT` transaction.
+3. **Scrollable, Non-Resizeable, Word-Wrapped Click-to-Copy Table**:
+   - The dashboard table uses `table-layout: fixed`, explicit `<colgroup>` widths, `resize: none`, `white-space: normal`, `overflow-wrap: anywhere`, and sticky `<thead>` headers.
+   - Click/tap and keyboard (`Enter`/`Space`) copy delegation uses `navigator.clipboard.writeText` with a `<textarea>` + `document.execCommand('copy')` fallback so copying works on mobile phones over plain HTTP LANs.
+4. **Canonical SHA-256 Read-Back Verification**:
+   - Generated `.xlsx`, `.csv`, and `.sqlite` exports are re-parsed from disk and checked cell-for-cell against the filtered/combined rows (`verifyOutputs`) before returning download links.
 
 ## 5. HTTP API Specification
 
-### `GET /api/health`
-- **Response `200 OK`**:
-  ```json
-  { "status": "ok", "nodeVersion": "v25.9.0" }
-  ```
+- `GET /api/health` (Public): `{ "status": "ok", "nodeVersion": "v25.9.0" }`
+- `GET /api/auth/status` (Public): `{ "authenticated": boolean }`
+- `POST /api/auth/login` (Public): JSON `{ "password": "..." }` -> `200 { "ok": true }` + `Set-Cookie`, `401` on invalid password, `429` on rate limit.
+- `POST /api/auth/logout` (Public): Revokes session token in SQLite and clears cookie (`200 { "ok": true }`).
+- `GET /api/data?q=<query>` (Auth): Returns `{ hasData, meta, columns, rows, totalRows, filteredRows }`.
+- `POST /api/import` (Auth): `multipart/form-data` (`file`: `.xls`/`.xlsx`/`.csv`/`.sqlite`/`.db`) -> `200 { ok: true, meta, columns, totalRows }`.
+- `POST /api/process` (Auth): `multipart/form-data` (`file`, optional `includeDuk=true`, optional `dukFile`) -> `200` JSON with `stats`, `duk`, `integrity`, `downloads`, and `preview`.
+- `GET /api/download/:jobId/:format` (Auth): Streams verified `xlsx`, `csv`, or `sqlite` file with `Content-Disposition: attachment`.
 
-### `POST /api/process`
-- **Request**: `multipart/form-data`:
-  - `file` (required): `.xls` or `.xlsx` base Excel workbook
-  - `includeDuk` (optional): `'true'` when merging a DUK support file
-  - `dukFile` (required when `includeDuk=true`): `.html` or `.htm` DUK-SISDM export
-- **Response `200 OK`**:
-  - `jobId`, `sourceFile`, `sheetName`, `tableName`
-  - `filter`: `{ column, columnLetter, query }`
-  - `stats`: `{ totalSourceRows, baseExcelFilteredRows, addedFromDukCount, filteredRowCount, excludedRowCount, originalColumnCount, outputColumnCount, removedColumnCount, processingTimeMs }`
-  - `duk`: `{ enabled: false }` or `{ enabled: true, sourceFile, satkerTitle, totalDukRows, alreadyInExcelCount, addedFromDukCount, addedPeople }`
-  - `columns`: `{ kept, removed }`
-  - `integrity`: `{ verified, algorithm, checksum, checkedRows, checkedColumns, alteredCells, rowNumberFormats, formats }`
-  - `downloads`: `{ xlsx, csv, sqlite }` (each `{ url, filename, bytes }`)
-  - `preview`: `{ headers, rows, totalRows }` (up to 500 rows)
-- **Error Responses**:
-  - `400 Bad Request`: missing file, unsupported extension, malformed Excel/HTML, missing `SATKER_3`, or `includeDuk=true` without `dukFile`.
-  - `413 Payload Too Large`: file exceeds `MAX_FILE_SIZE_BYTES`.
-  - `500 Internal Server Error`: unexpected processing or integrity error.
+## 6. Security Controls
 
-### `GET /api/download/:jobId/:format`
-- **Parameters**: `jobId` (UUID v4), `format` (`xlsx` | `csv` | `sqlite`).
-- **Response `200 OK`**: Binary/text stream with explicit `Content-Type`, `Content-Length`, `Content-Disposition: attachment; filename="..."`, and `Cache-Control: no-store`.
-- **Error Responses**: `400 Bad Request` (invalid UUID or format), `404 Not Found` (unknown or expired job).
-
-## 6. Security & Lifecycle Controls
-
-- **Path Traversal Prevention**: Download `jobId` is validated against strict UUID v4 regex before lookup; download filenames are sanitized via `sanitizeFileBase`.
-- **Memory & Disk Bounds**: Uploaded files are capped by `multer` size and field-count limits (`files: 2`), and generated job directories under `tmp/jobs/` are removed automatically after `JOB_TTL_MINUTES` (default 60 minutes) or immediately on export error.
-- **XSS Prevention**: `public/app.js` renders all filenames, DUK added employee names, headers, and cell values exclusively via `.textContent` (never `innerHTML`).
+- **Password & Session Security**: Password checked via SHA-256 + `crypto.timingSafeEqual`; 256-bit random hex tokens persisted in SQLite `_sessions`; `HttpOnly; SameSite=Lax` cookie flag; per-IP failed login throttling (`25` failures per `15` minutes).
+- **Path Traversal & File Bounds**: Download `jobId` validated against strict UUID v4 regex; `multer` limits uploads to `100 MB` default; SQLite identifiers quoted via `quoteIdent` and `LIKE` wildcards escaped.
+- **XSS Prevention**: All client scripts (`login.js`, `dashboard.js`, `generate.js`) render dynamic text strictly via `.textContent`.

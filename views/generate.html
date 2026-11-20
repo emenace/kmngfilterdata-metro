@@ -3,13 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kemenag Kota Metro — Excel Data Filter</title>
+  <title>Generate Filtered Files — Kemenag Kota Metro</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="page-shell">
+    <nav class="top-bar card top-bar-compact" aria-label="Page navigation">
+      <div class="top-bar-brand">
+        <div class="header-badge">Kementerian Agama Kota Metro</div>
+        <div class="top-bar-sub-heading">Excel Filter &amp; Multi-Format Export</div>
+      </div>
+      <div class="top-actions">
+        <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+        <button id="logoutBtn" type="button" class="btn btn-ghost">Logout</button>
+      </div>
+    </nav>
+
     <header class="app-header">
-      <div class="header-badge">Kementerian Agama Kota Metro</div>
       <h1>Excel Employee Data Filter &amp; Exporter</h1>
       <p class="subtitle">
         Upload the monthly provincial Excel file to automatically isolate
@@ -249,6 +259,7 @@
     </main>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="/generate.js"></script>
 </body>
 </html>
+
