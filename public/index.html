@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kemenag Kota Metro — Excel Data Filter</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="app-header">
+      <div class="header-badge">Kementerian Agama Kota Metro</div>
+      <h1>Excel Employee Data Filter &amp; Exporter</h1>
+      <p class="subtitle">
+        Upload the monthly provincial Excel file to automatically isolate
+        <strong>Kantor Kementerian Agama Kota Metro</strong> records, optionally merge missing personnel from a
+        <strong>DUK-SISDM HTML</strong> support file, strip all <code>KODE_*</code> columns, verify cell-level data integrity, and download
+        <strong>XLSX</strong>, <strong>CSV</strong>, and <strong>SQLite</strong> outputs.
+      </p>
+      <div class="rule-pills" aria-label="Automated processing rules">
+        <span class="rule-pill"><strong>Filter:</strong> Column X (<code>SATKER_3</code>) contains &ldquo;Kantor Kementerian Agama Kota Metro&rdquo;</span>
+        <span class="rule-pill"><strong>Drop:</strong> All <code>KODE_*</code> columns</span>
+        <span class="rule-pill"><strong>XLSX &amp; CSV:</strong> Sequential Column A (<code>NO</code> 1&hellip;N)</span>
+        <span class="rule-pill"><strong>Integrity:</strong> Exact cell values preserved &amp; SHA-256 verified</span>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section id="uploadSection" class="card upload-card">
+        <div class="duk-option-row">
+          <label class="checkbox-label" for="dukToggle">
+            <input id="dukToggle" type="checkbox" class="checkbox-input" />
+            <span>
+              <strong>Add DUK HTML support file</strong>
+              <span class="checkbox-hint">Include employees from a DUK-SISDM <code>.html</code> export who are missing from the base Excel file.</span>
+            </span>
+          </label>
+        </div>
+
+        <div id="dropzonesGrid" class="dropzones-grid">
+          <div class="dropzone-col">
+            <div class="dropzone-label">1. Base Provincial Excel (Required)</div>
+            <label id="dropzone" class="dropzone" for="fileInput" tabindex="0">
+              <input id="fileInput" type="file" accept=".xls,.xlsx" class="sr-only" />
+              <div class="dropzone-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+              </div>
+              <div id="excelDropTitle" class="dropzone-title">Drop your Excel file here, or <span class="browse-link">browse from computer</span></div>
+              <div id="excelDropHint" class="dropzone-hint">Supports legacy <code>.xls</code> (BIFF8) and <code>.xlsx</code> up to 100 MB. Processing starts automatically upon upload.</div>
+              <div id="excelSelectedBadge" class="selected-file-badge hidden"></div>
+            </label>
+          </div>
+
+          <div id="dukUploadWrap" class="dropzone-col hidden">
+            <div class="dropzone-label">2. DUK-SISDM Support HTML (Required when checked)</div>
+            <label id="dukDropzone" class="dropzone dropzone-duk" for="dukFileInput" tabindex="0">
+              <input id="dukFileInput" type="file" accept=".html,.htm" class="sr-only" />
+              <div class="dropzone-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="12" y1="18" x2="12" y2="12" />
+                  <line x1="9" y1="15" x2="15" y2="15" />
+                </svg>
+              </div>
+              <div class="dropzone-title">Drop your DUK HTML file here, or <span class="browse-link">browse from computer</span></div>
+              <div class="dropzone-hint">Supports DUK-SISDM <code>.html</code> / <code>.htm</code> exports. Missing people will be appended after base Excel rows.</div>
+              <div id="dukSelectedBadge" class="selected-file-badge hidden"></div>
+            </label>
+          </div>
+        </div>
+
+        <div id="combineActions" class="combine-actions hidden">
+          <div id="combineStatusHint" class="combine-hint">Select both the base Excel file and the DUK HTML file to continue.</div>
+          <button id="processCombineBtn" type="button" class="btn btn-primary" disabled>Process &amp; Combine Files</button>
+        </div>
+      </section>
+
+      <section id="processingPanel" class="card status-card hidden" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          <div class="status-title">Processing &amp; verifying data&hellip;</div>
+          <div id="processingFileMeta" class="status-meta"></div>
+        </div>
+      </section>
+
+      <section id="errorBox" class="alert alert-error hidden" role="alert">
+        <div class="alert-title">Unable to process file</div>
+        <div id="errorMessage" class="alert-body"></div>
+      </section>
+
+      <section id="resultsPanel" class="results-panel hidden">
+        <div class="card summary-header-card">
+          <div class="summary-file-info">
+            <div class="eyebrow">Processed Dataset</div>
+            <h2 id="sourceFilename" class="source-filename"></h2>
+            <div id="sourceMeta" class="source-meta"></div>
+          </div>
+          <button id="resetBtn" type="button" class="btn btn-secondary">Upload New File</button>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Source Data Rows</div>
+            <div id="statSourceRows" class="kpi-value">0</div>
+            <div class="kpi-sub">Total rows read from sheet</div>
+          </div>
+          <div class="kpi-card kpi-highlight">
+            <div class="kpi-label">Kota Metro Output Rows</div>
+            <div id="statFilteredRows" class="kpi-value">0</div>
+            <div id="statFilteredRowsSub" class="kpi-sub">Matched <code>SATKER_3</code></div>
+          </div>
+          <div id="kpiDukAddedCard" class="kpi-card kpi-duk hidden">
+            <div class="kpi-label">Added from DUK HTML</div>
+            <div id="statDukAdded" class="kpi-value">0</div>
+            <div id="statDukAddedSub" class="kpi-sub">Missing from base Excel</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Removed Columns</div>
+            <div id="statRemovedCols" class="kpi-value">0</div>
+            <div class="kpi-sub">Prefix <code>KODE_*</code> dropped</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Output Data Columns</div>
+            <div id="statKeptCols" class="kpi-value">0</div>
+            <div class="kpi-sub">Plus Column A (<code>NO</code>) in XLSX/CSV</div>
+          </div>
+        </div>
+
+        <div id="integrityBanner" class="card integrity-card">
+          <div class="integrity-top">
+            <div class="integrity-badge">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                <polyline points="22 4 12 14.01 9 11.01" />
+              </svg>
+              <span>Data Integrity Verified &mdash; 0 Cells Altered</span>
+            </div>
+            <div id="processingDuration" class="duration-pill"></div>
+          </div>
+          <p class="integrity-desc">
+            Every exported file was read back from disk and verified cell-by-cell against the filtered/combined rows.
+            Long numeric identifiers (e.g. 18-digit <code>NIP_BARU</code>), mixed date strings, leading zeros, and empty cells remain untouched.
+            XLSX and CSV include sequential Column A (<code>NO</code> 1&hellip;N).
+          </p>
+          <div class="checksum-row">
+            <span class="checksum-label">SHA-256 Digest:</span>
+            <code id="integrityChecksum" class="checksum-code"></code>
+          </div>
+        </div>
+
+        <section class="card downloads-card">
+          <h3 class="section-title">Download Filtered Outputs</h3>
+          <p class="section-desc">Each export contains the exact same verified dataset in a separate format.</p>
+          <div class="downloads-grid">
+            <a id="downloadXlsx" class="download-btn download-xlsx" href="#" download>
+              <div class="download-btn-head">
+                <span class="format-tag">XLSX</span>
+                <span id="sizeXlsx" class="file-size"></span>
+              </div>
+              <div class="download-btn-title">Download Excel (.xlsx)</div>
+              <div class="download-btn-note">Includes Column A (<code>NO</code> 1&hellip;N)</div>
+              <div id="nameXlsx" class="download-btn-file"></div>
+            </a>
+
+            <a id="downloadCsv" class="download-btn download-csv" href="#" download>
+              <div class="download-btn-head">
+                <span class="format-tag">CSV</span>
+                <span id="sizeCsv" class="file-size"></span>
+              </div>
+              <div class="download-btn-title">Download CSV (.csv)</div>
+              <div class="download-btn-note">Includes Column A (<code>NO</code> 1&hellip;N)</div>
+              <div id="nameCsv" class="download-btn-file"></div>
+            </a>
+
+            <a id="downloadSqlite" class="download-btn download-sqlite" href="#" download>
+              <div class="download-btn-head">
+                <span class="format-tag">SQLite</span>
+                <span id="sizeSqlite" class="file-size"></span>
+              </div>
+              <div class="download-btn-title">Download SQLite (.sqlite)</div>
+              <div class="download-btn-note">Single portable SQLite 3 file</div>
+              <div id="nameSqlite" class="download-btn-file"></div>
+            </a>
+          </div>
+        </section>
+
+        <section id="dukSummaryCard" class="card duk-summary-card hidden">
+          <details open>
+            <summary class="columns-summary">
+              <span>DUK HTML Merge Summary (<span id="dukSummaryCounts"></span>)</span>
+              <span class="summary-toggle-hint">People added from support file</span>
+            </summary>
+            <div id="dukSourceMeta" class="duk-source-meta"></div>
+            <ul id="dukAddedList" class="duk-added-list"></ul>
+          </details>
+        </section>
+
+        <section class="card columns-card">
+          <details>
+            <summary class="columns-summary">
+              <span>Column Audit (<span id="colAuditCounts"></span>)</span>
+              <span class="summary-toggle-hint">Click to inspect kept &amp; removed columns</span>
+            </summary>
+            <div class="columns-lists">
+              <div class="col-group">
+                <h4>Removed <code>KODE_*</code> Columns</h4>
+                <div id="removedColumnsList" class="chip-list"></div>
+              </div>
+              <div class="col-group">
+                <h4>Retained Output Columns</h4>
+                <div id="keptColumnsList" class="chip-list"></div>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section class="card preview-card">
+          <div class="preview-toolbar">
+            <div>
+              <h3 class="section-title">Filtered Data Preview</h3>
+              <p id="previewSubtitle" class="section-desc"></p>
+            </div>
+            <div class="preview-controls">
+              <input id="previewSearch" type="search" class="search-input" placeholder="Search preview rows (name, NIP, satker)..." aria-label="Search preview rows" />
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table id="previewTable" class="data-table">
+              <thead id="previewThead"></thead>
+              <tbody id="previewTbody"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination-bar">
+            <span id="pageInfo" class="page-info"></span>
+            <div class="pagination-buttons">
+              <button id="prevPage" type="button" class="btn btn-small">Previous</button>
+              <button id="nextPage" type="button" class="btn btn-small">Next</button>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

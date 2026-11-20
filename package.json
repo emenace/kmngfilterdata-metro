@@ -1,0 +1,30 @@
+{
+  "name": "kmngfilterdata-metro",
+  "version": "1.0.0",
+  "description": "Lightweight Node.js web application to filter Kemenag Kota Metro employee Excel data and export verified XLSX, CSV, and SQLite outputs.",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [
+    "excel",
+    "xls",
+    "xlsx",
+    "csv",
+    "sqlite",
+    "kemenag",
+    "kota-metro",
+    "data-filter"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.3.0",
+    "multer": "^2.5.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}
